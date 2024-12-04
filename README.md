@@ -1,3 +1,38 @@
+# RAG Pipeline for LaTeX Documents
+This project implements a Retrieval-Augmented Generation (RAG) pipeline for querying and generating responses based on internal LaTeX documents. The solution uses AWS services, OpenSearch, and OpenAI GPT to process and query documents.
+
+# Features
+- Preprocess LaTeX documents into plain text.
+- Store embeddings in AWS OpenSearch for semantic retrieval.
+- Retrieve relevant content for user queries using semantic similarity.
+- Generate responses using OpenAI GPT or AWS Bedrock.
+- Deployable on AWS with Lambda and API Gateway.
+
+# Architecture
+- Document Upload: Store LaTeX files in an S3 bucket.
+- Preprocessing: A Lambda function extracts and processes text from LaTeX files.
+- Embedding: Generate embeddings using a Sentence Transformer model.
+- Indexing: Store embeddings in OpenSearch for retrieval.
+- Querying: Users query the system via an API Gateway endpoint.
+- Generation: Retrieve relevant content and generate answers using OpenAI GPT or AWS Bedrock.
+
+# Requirements
+- Python Libraries
+   - boto3: AWS SDK for Python.
+   - sentence-transformers: For embedding generation.
+   - opensearch-py: OpenSearch client.
+   - openai: OpenAI GPT API.
+   - re: For LaTeX preprocessing.
+
+ # AWS Services
+   - S3: Store LaTeX documents.
+   - Lambda: Handle preprocessing, embedding, and querying.
+   - OpenSearch: Store and retrieve embeddings.
+   - API Gateway: Expose the pipeline via an HTTP endpoint.
+
+
+
+
 # Retrieval Augmented Generation (RAG) pipeline on top of internal LaTeX documents! Here’s a step by step guide tailored to this setup:
 
 # 1. Understand RAG
@@ -287,3 +322,128 @@ def lambda_handler(event, context):
 - Retriever: Query OpenSearch for relevant context.
 - Generator: Use OpenAI’s GPT or an AWS service to generate answers.
 - Deployment: Deploy on AWS with S3, Lambda, and API Gateway.
+
+# Setup Instructions
+
+## 1. Clone the Repository
+```bash
+git clone https://github.com/your-repo/rag-latex-pipeline.git
+cd rag-latex-pipeline
+```
+
+## 2. Preprocessing LaTeX Documents
+Extract text from .tex files:
+
+```python
+import os
+import re
+
+def preprocess_latex(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        latex_content = f.read()
+    text = re.sub(r"\\[a-zA-Z]+\{.*?\}", "", latex_content)  # Remove commands
+    text = re.sub(r"%.*", "", text)  # Remove comments
+    text = re.sub(r"\s+", " ", text)  # Normalize whitespace
+    return text.strip()
+
+```
+
+## 3. Embedding and Indexing
+Generate embeddings and store them in OpenSearch:
+```python
+from sentence_transformers import SentenceTransformer
+from opensearchpy import OpenSearch
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+chunks = ["chunk1 text", "chunk2 text"]  # Replace with actual chunks
+embeddings = [model.encode(chunk) for chunk in chunks]
+
+client = OpenSearch(
+    hosts=[{"host": "your-opensearch-endpoint", "port": 443}],
+    http_auth=('username', 'password'),
+    use_ssl=True,
+    verify_certs=True,
+)
+
+for i, (embedding, text) in enumerate(zip(embeddings, chunks)):
+    client.index(index="latex_index", body={"id": i, "embedding": embedding.tolist(), "text": text})
+
+```
+## 4. Querying
+Retrieve relevant chunks based on a query:
+
+
+```python
+def search_opensearch(query):
+    query_embedding = model.encode(query)
+    response = client.search(
+        index="latex_index",
+        body={
+            "query": {
+                "script_score": {
+                    "query": {"match_all": {}},
+                    "script": {
+                        "source": "cosineSimilarity(params.query_vector, doc['embedding']) + 1.0",
+                        "params": {"query_vector": query_embedding.tolist()}
+                    }
+                }
+            },
+            "size": 3
+        }
+    )
+    return [hit["_source"]["text"] for hit in response["hits"]["hits"]]
+
+
+
+```
+
+## 5. Response Generation
+Use OpenAI GPT for generation:
+```python
+import openai
+openai.api_key = "your_openai_api_key"
+
+def generate_response(query, context):
+    prompt = f"Answer the query based on the context provided.\n\nQuery: {query}\n\nContext: {context}\n\nAnswer:"
+    response = openai.Completion.create(
+        engine="text-davinci-003",
+        prompt=prompt,
+        max_tokens=300
+    )
+    return response["choices"][0]["text"].strip()
+
+```
+
+## 6. Deploy on AWS
+ - Lambda: Upload functions to AWS Lambda for:
+   - Preprocessing and embedding.
+   - Querying and response generation.
+ - API Gateway: Set up an endpoint to handle user queries.
+   - Example Lambda handler:
+
+```python
+def lambda_handler(event, context):
+    query = event["queryStringParameters"]["query"]
+    retrieved_docs = search_opensearch(query)
+    context = " ".join(retrieved_docs)
+    response = generate_response(query, context)
+    return {"statusCode": 200, "body": json.dumps({"response": response})}
+```
+
+# Usage
+  - Upload LaTeX documents to the S3 bucket.
+  - Query the system via API Gateway
+    
+```bash
+curl -X GET "https://your-api-gateway-endpoint?query=Explain Fourier Transform."
+```
+
+  - Receive a JSON response with the generated answer.
+
+ # Future Enhancements
+ - Support for equations (e.g., MathML extraction).
+ - Interactive front-end for queries and uploads.
+ - Optimize retrieval and embeddings for mathematical content
+
+ # License
+This project is licensed under the MIT License.
